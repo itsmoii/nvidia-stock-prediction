@@ -6,14 +6,19 @@ import plotly.graph_objects as go
 import joblib
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from src.lstm_model import evaluate_lstm, plot_predictions
 import tensorflow as tf
 
 st.set_page_config(layout="wide")
 
 # load stock data 
-df  = pd.read_csv('data/nvidia_stock.csv', parse_dates=['Date'])
+df  = pd.read_csv('data/final_dataset.csv', parse_dates=['Date'])
 df = df.sort_values('Date')
 df.set_index('Date', inplace=True)
+df.dropna(inplace=True)
+window_size=60
+
+lstm_metrics_summary = []
 
 st.title("NVIDIA Stock Prediction with Sentiment Analysis")
 st.sidebar.header("Navigation")
@@ -44,142 +49,143 @@ elif selection == "Train and predict":
     model_choice = st.sidebar.selectbox("Select Model", ["LSTM", "XGBoost", "Random Forest"])
 
     if model_choice == "LSTM":
+        # Stock only 
+        data1 = df[['Close']].values
+        scaler_path1 = 'models/scaler_stock.save'
+        model_path1 = 'models/lstm_stock.h5'
+        feature_count1 = 1
+
+        predicted1, actual1, metrics1 = evaluate_lstm(model_path1, scaler_path1, data1, window_size, feature_count1)
+        lstm_metrics_summary.append({
+            "Model": "Stock Only",
+            "RMSE": metrics1["RMSE"],
+            "MAE": metrics1["MAE"],
+            "R2": metrics1["R2"]
+        })
+
+        fig1 = plot_predictions(df.index[window_size:], actual1, predicted1, "Stock Only")
+
+        # Stock and Sentiment
+        data2 = df[['Close', 'avg_sentiment']].values
+
+        scaler_path2 = 'models/scaler_stock&sentiment.save'
+        model_path2 = 'models/lstm_stock&sentiment.h5'
+        feature_count2 =2
+
+        predicted2, actual2, metrics2 = evaluate_lstm(model_path2, scaler_path2, data2, window_size, feature_count2)
+        
+        lstm_metrics_summary.append({
+            "Model": "Stock and Sentiment",
+            "RMSE": metrics2["RMSE"],
+            "MAE": metrics2["MAE"],
+            "R2": metrics2["R2"]
+        })
+
+        fig2 = plot_predictions(df.index[window_size:], actual2, predicted2, "Stock and Sentiment")
+
+        # Stock and Technical Indicators
+        data3 = df[['Close', 'EMA_10', 'SMA_10', 'MACD', 'MACD_Signal', 'RSI']].values
+            
+        scaler_path3 = 'models/scaler_stock&indicators.save'
+        model_path3 = 'models/lstm_stock&indicators.h5'
+        feature_count3=6
+
+        predicted3, actual3, metrics3 = evaluate_lstm(model_path3, scaler_path3, data3, window_size, feature_count3)
+
+        lstm_metrics_summary.append({
+            "Model": "Stock and Indicators",
+            "RMSE": metrics3["RMSE"],
+            "MAE": metrics3["MAE"],
+            "R2": metrics3["R2"]
+        })
+
+        fig3 = plot_predictions(df.index[window_size:], actual3, predicted3, "Stock and Indicators")
+
+        # Combined Stock, Sentiment, and Technical Indicators
+        data4 = df[['Close', 'EMA_10', 'SMA_10', 'MACD', 'MACD_Signal', 'RSI', 'avg_sentiment', 'Volume']].values
+
+        scaler_path4 = 'models/scaler_combined.save'
+        model_path4 = 'models/lstm_combined.h5'
+        feature_count4=8
+
+        predicted4, actual4, metrics4 = evaluate_lstm(model_path4, scaler_path4, data4, window_size, feature_count4)
+        lstm_metrics_summary.append({
+            "Model": "Stock + Indicators + Sentiment",
+            "RMSE": metrics4["RMSE"],
+            "MAE": metrics4["MAE"],
+            "R2": metrics4["R2"]
+        })
+
+        fig4 = plot_predictions(df.index[window_size:], actual4, predicted4, "Stock + Indicators + Sentiment")
+
+
         dataset_choice = st.sidebar.selectbox("Select Dataset", ["Stock", "Stock and Sentiment", 
                                                             "Stock + Technical Indicators",
-                                                            "Stock + Sentiment + Technical Indicators"])
+                                                            "Stock + Sentiment + Technical Indicators",
+                                                            "comparison"])
         
         if dataset_choice == "Stock":
             st.header("LSTM Model - Stock Data Only")
-            data = df[['Close']].values
-
-            scaler = joblib.load('models/scaler_stock.save')
-            scaled_data = scaler.transform(data)
-
-            def create_sequences(data, window_size):
-                x, y  = [], []
-                for i in range(len(data) - window_size):
-                    x.append(data[i:i + window_size])
-                    y.append(data[i + window_size])
-                return np.array(x), np.array(y)
-            
-            window_size = 60 
-
-            x, y = create_sequences(scaled_data, window_size)
-            x = x.reshape((x.shape[0], x.shape[1], 1))
-        
-            
-            model = tf.keras.models.load_model('models/lstm_stock.h5')
-            predicted = model.predict(x)
-
-            predicted = scaler.inverse_transform(predicted)
-            actual = scaler.inverse_transform(y)
-
-            # Evaluate model performance
-            rmse = np.sqrt(mean_squared_error(actual, predicted))
-            mae = mean_absolute_error(actual, predicted)
-            r2 = r2_score(actual, predicted)
-
-            metrics_data = {
-                'Metric': ['RMSE', 'MAE', 'R² Score'],
-                'Value': [rmse, mae, r2]
-            
-            }
-
-            metric_df = pd.DataFrame(metrics_data)
-
-            plt.figure(figsize=(12,6))
-            plt.plot(actual, label='Actual Price')
-            plt.plot(predicted, label='Predicted Price')
-            plt.legend()
-            plt.title("LSTM Predictions vs Actual NVIDIA Stock Prices")
-            plt.show()
-
-            df_plot = pd.DataFrame({
-                'Date':  df.index[window_size:],         # Use same index as actual/predicted
-                'Actual Price': actual.flatten(),
-                'Predicted Price': predicted.flatten()
-            })
-
-            fig = px.line(
-                df_plot,
-                x='Date',
-                y=['Actual Price', 'Predicted Price'],
-                labels={'value': 'Closing Price (USD)', 'variable': 'Legend'},
-                title='LSTM Predictions using only Closing Price'
-            )
-
-            st.plotly_chart(fig)
-
-            st.table(metric_df.reset_index(drop=True))
+            st.plotly_chart(fig1)
+            st.subheader("Evaluation Metrics")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("RMSE", f"{metrics1['RMSE']:.3f}")
+            col2.metric("MAE", f"{metrics1['MAE']:.3f}")
+            col3.metric("R² Score", f"{metrics1['R2']:.3f}")
+       
         
         elif dataset_choice == "Stock and Sentiment":
             st.header("LSTM Model - Stock and Sentiment Data")
+            st.plotly_chart(fig2)
+            st.subheader("Evaluation Metrics")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("RMSE", f"{metrics2['RMSE']:.3f}")
+            col2.metric("MAE", f"{metrics2['MAE']:.3f}")
+            col3.metric("R² Score", f"{metrics2['R2']:.3f}")
 
-            df  = pd.read_csv('data/final_dataset.csv', parse_dates=['Date'])
-            df = df.sort_values('Date')
-            df.set_index('Date', inplace=True)
+       
 
-            data = df[['Close', 'avg_sentiment']].values
+        elif dataset_choice == "Stock + Technical Indicators":
+            st.header("LSTM Model - Stock and Technical Indicators")
+            st.plotly_chart(fig3)
+            st.subheader("Evaluation Metrics")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("RMSE", f"{metrics3['RMSE']:.3f}")
+            col2.metric("MAE", f"{metrics3['MAE']:.3f}")
+            col3.metric("R² Score", f"{metrics3['R2']:.3f}")
 
-            scaler = joblib.load('models/scaler_stock&sentiment.save')
-            scaled_data = scaler.transform(data)
+        elif dataset_choice == "Stock + Sentiment + Technical Indicators":
+            st.header("LSTM Model - Stock and Technical Indicators")
+            st.plotly_chart(fig4)
+            st.subheader("Evaluation Metrics")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("RMSE", f"{metrics4['RMSE']:.3f}")
+            col2.metric("MAE", f"{metrics4['MAE']:.3f}")
+            col3.metric("R² Score", f"{metrics4['R2']:.3f}")
 
-            def create_sequences(data, window_size):
-                x, y  = [], []
-                for i in range(len(data) - window_size):
-                    x.append(data[i:i + window_size])
-                    y.append(data[i + window_size][0]) # Predict only the stock price
-                return np.array(x), np.array(y)
-            
-            window_size = 60 
+        elif dataset_choice == "comparison":
+            st.subheader("📊 LSTM Model Comparison")
+            summary_df = pd.DataFrame(lstm_metrics_summary)
+            summary_df = summary_df.round(3)
+            st.dataframe(summary_df)
 
-            x, y = create_sequences(scaled_data, window_size)
-            x = x.reshape((x.shape[0], x.shape[1], 2))  # 2 features: Close price and sentiment
-        
-            
-            model = tf.keras.models.load_model('models/lstm_stock&sentiment.h5')
-            predicted = model.predict(x)
-
-            predicted_extended = np.zeros((predicted.shape[0], 2))
-            predicted_extended[:, 0] = predicted[:, 0]
-
-            actual_extended = np.zeros((y.shape[0], 2))
-            actual_extended[:, 0] = y
-
-            predicted_inversed = scaler.inverse_transform(predicted_extended)[:, 0]
-            actual_inversed = scaler.inverse_transform(actual_extended)[:, 0]
-
-            # Evaluate model performance
-            rmse = np.sqrt(mean_squared_error(actual_inversed, predicted_inversed))
-            mae = mean_absolute_error(actual_inversed, predicted_inversed)
-            r2 = r2_score(actual_inversed, predicted_inversed)
-
-            metrics_data = {
-                'Metric': ['RMSE', 'MAE', 'R² Score'],
-                'Value': [rmse, mae, r2]
-            
-            }
-
-            metric_df = pd.DataFrame(metrics_data)
-
-            # Plotting the actual vs predicted prices
-            df_plot = pd.DataFrame({
-                'Date':  df.index[window_size:],         # Use same index as actual/predicted
-                'Actual Price': actual_inversed,
-                'Predicted Price': predicted_inversed
-            })
-
-            fig = px.line(
-                df_plot,
-                x='Date',
-                y=['Actual Price', 'Predicted Price'],
-                labels={'value': 'Closing Price (USD)', 'variable': 'Legend'},
-                title='LSTM Predictions using only Closing Price'
+            fig_grouped = px.bar(
+                summary_df.melt(id_vars="Model", value_vars=["RMSE", "MAE", "R2"]),
+                x="Model",
+                y="value",
+                color="variable",
+                barmode="group",
+                text="value",
+                title="LSTM Models - Metrics Comparison",
+                template="plotly_white"
             )
+            fig_grouped.update_traces(texttemplate='%{text:.3f}', textposition='outside')
+            st.plotly_chart(fig_grouped, use_container_width=True)
 
-            st.plotly_chart(fig)
 
-            st.table(metric_df.reset_index(drop=True))
+            
+
+
 
 
 
