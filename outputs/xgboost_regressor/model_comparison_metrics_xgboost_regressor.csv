@@ -1,0 +1,5 @@
+Variant,MAE,RMSE,R2
+Stock Only,2.6931,3.7931,0.8689
+Stock + Technical Indicators,2.9674,4.127,0.8448
+Stock + Sentiment,1.714,2.3418,0.95
+All Combined,3.0105,4.1577,0.8425

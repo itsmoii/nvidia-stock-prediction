@@ -1,0 +1,9 @@
+python -m venv venv
+
+source venv/Scripts/activate
+
+pip install -r xgboost_requirements.txt
+
+Go to "src" directory and run the python file "train_xgboost_regressor.py".
+
+Outputs will be generated and saved in the "output" directory.
