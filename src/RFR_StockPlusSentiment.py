@@ -6,86 +6,82 @@ from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from sklearn.metrics import r2_score
 from joblib import parallel_backend
 
+
 def run_stock_sentiment_prediction():
+    # Load data
     try:
-        df = pd.read_csv('../data/final_dataset.csv')
+        df = pd.read_csv('../Data/final_dataset.csv', parse_dates=['Date'])
     except FileNotFoundError:
         print("Error: 'final_dataset.csv' not found.")
         return
-
-    # --- User Configuration ---
-    user_sentiment_cols = ['compound', 'neg', 'neu', 'pos']  # Change based on your dataset
-    stock_feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-    # ---------------------------
-
-    if 'Date' not in df.columns:
-        print("Error: 'Date' column is required.")
+    except Exception as e:
+        print(f"Error loading data: {str(e)}")
         return
 
-    df['Date'] = pd.to_datetime(df['Date'])
-    df = df.sort_values('Date').reset_index(drop=True)
-
-    stock_cols = [col for col in stock_feature_cols if col in df.columns]
-    sentiment_cols = [col for col in user_sentiment_cols if col in df.columns]
-
-    if 'Close' not in stock_cols and 'Close' in df.columns:
-        stock_cols.append('Close')
-
-    selected_cols = stock_cols + sentiment_cols
-    if not selected_cols:
-        print("Error: No valid stock or sentiment columns found.")
+    # Validate required columns
+    required_cols = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'avg_sentiment']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        print(f"Error: Missing required columns - {missing_cols}")
         return
 
-    df = df[['Date'] + selected_cols].dropna()
-    if df.empty or len(df) < 61:
-        print("Error: Not enough data after filtering and dropping NaNs.")
+    # Prepare data
+    df = df[required_cols].dropna().sort_values('Date')
+    if len(df) < 61:
+        print("Error: Insufficient data (need at least 61 days).")
         return
 
+    # Scale features
     scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df[selected_cols])
-    scaled_df = pd.DataFrame(scaled_data, columns=selected_cols)
+    scaled_data = scaler.fit_transform(df.drop(columns=['Date']))
+    scaled_df = pd.DataFrame(scaled_data, columns=df.columns.drop('Date'))
 
-    look_back = 60
-    pred_horizon = 1
-    target_col = 'Close'
-    close_index = selected_cols.index(target_col)
-
+    # Create time-series dataset (60-day lookback, 1-day ahead)
     X, y = [], []
-    for i in range(look_back, len(scaled_df) - pred_horizon + 1):
-        X.append(scaled_df.iloc[i - look_back:i].values)
-        y.append(scaled_df.iloc[i + pred_horizon - 1, close_index])
+    close_index = scaled_df.columns.get_loc('Close')
 
-    X = np.array(X).reshape(len(X), -1)
-    y = np.array(y)
+    for i in range(60, len(scaled_df)):
+        X.append(scaled_df.iloc[i - 60:i].values.flatten())  # Flatten 60-day window
+        y.append(scaled_df.iloc[i, close_index])  # Next day's close price
 
-    split_index = int(0.8 * len(X))
-    X_train, X_test = X[:split_index], X[split_index:]
-    y_train, y_test = y[:split_index], y[split_index:]
+    X, y = np.array(X), np.array(y)
 
-    if len(X_train) == 0 or len(X_test) == 0:
-        print("Error: Insufficient train/test data split.")
-        return
+    # Train-test split (80/20)
+    split_idx = int(0.8 * len(X))
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
 
-    # --- Grid Search with TimeSeriesSplit and thread backend to avoid error ---
+    # Hyperparameter tuning
     param_grid = {
-        'n_estimators': [100],
+        'n_estimators': [100, 200],
         'max_depth': [5, 10, None],
         'min_samples_split': [2, 5],
         'min_samples_leaf': [1, 2]
     }
 
+    # Time-series cross-validation
     tscv = TimeSeriesSplit(n_splits=5)
-    rf = RandomForestRegressor(random_state=42)
+    model = RandomForestRegressor(random_state=42)
 
+    # Train with threading
     with parallel_backend('threading'):
-        grid_search = GridSearchCV(rf, param_grid, cv=tscv, scoring='r2', n_jobs=-1)
+        grid_search = GridSearchCV(
+            model,
+            param_grid,
+            cv=tscv,
+            scoring='r2',
+            n_jobs=-1,
+            verbose=0
+        )
         grid_search.fit(X_train, y_train)
 
+    # Evaluate
     best_model = grid_search.best_estimator_
     y_pred = best_model.predict(X_test)
+    r2 = r2_score(y_test, y_pred)
 
-    test_accuracy = r2_score(y_test, y_pred)
-    print(f"Final R² Accuracy (Test Set): {test_accuracy:.2f}")
+    print(f"Final R² Accuracy (Test Set): {r2:.2f}")
+
 
 if __name__ == '__main__':
     run_stock_sentiment_prediction()
