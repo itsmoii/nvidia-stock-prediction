@@ -10,7 +10,7 @@ from joblib import parallel_backend
 def run_stock_sentiment_prediction():
     # Load data
     try:
-        df = pd.read_csv('../Data/final_dataset.csv', parse_dates=['Date'])
+        df = pd.read_csv('../data/final_dataset.csv', parse_dates=['Date'])
     except FileNotFoundError:
         print("Error: 'final_dataset.csv' not found.")
         return
