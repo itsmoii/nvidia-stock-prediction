@@ -9,7 +9,7 @@ from joblib import parallel_backend
 
 def run_stock_only_prediction():
     try:
-        df = pd.read_csv('../Data/final_dataset.csv')
+        df = pd.read_csv('../data/final_dataset.csv')
     except FileNotFoundError:
         print("Error: 'final_dataset.csv' not found.")
         return
