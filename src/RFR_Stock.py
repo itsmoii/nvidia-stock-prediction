@@ -6,7 +6,7 @@ from sklearn.metrics import r2_score
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
 
 # --- Load Data ---
-df = pd.read_csv('../Data/final_dataset.csv')
+df = pd.read_csv('../data/final_dataset.csv')
 df['Date'] = pd.to_datetime(df['Date'])
 df = df.sort_values('Date').reset_index(drop=True)
 
