@@ -1,214 +1,94 @@
 import pandas as pd
 import numpy as np
-import streamlit as st
-from sklearn.model_selection import TimeSeriesSplit, GridSearchCV
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-import ta
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import seaborn as sns  # Import seaborn correctly
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.metrics import r2_score
+from joblib import parallel_backend
 
-# Streamlit configuration
-st.set_page_config(layout="wide", page_title="Stock Price Prediction")
-st.title("NVIDIA Stock Price Prediction with Random Forest Regressor")
+def run_stock_technical_prediction():
+    try:
+        df = pd.read_csv('../data/final_dataset.csv')
+    except FileNotFoundError:
+        print("Error: 'final_dataset.csv' not found.")
+        return
 
-# Sidebar parameters
-st.sidebar.header("Model Parameters")
-n_estimators = st.sidebar.selectbox("Number of estimators", [100, 200, 300], index=1)
-max_depth = st.sidebar.selectbox("Max depth", [None, 10, 20, 30], index=2)
-test_size = st.sidebar.slider("Test set size (%)", 10, 40, 20)
+    if 'Date' not in df.columns:
+        print("Error: 'Date' column is required.")
+        return
 
-# Progress bar
-progress_bar = st.progress(0)
-status_text = st.empty()
-
-def update_progress(step, total_steps=6):
-    progress_bar.progress(int((step / total_steps) * 100))
-
-# --- Data Loading and Preprocessing ---
-update_progress(1)
-status_text.text("Loading and preprocessing data...")
-
-@st.cache_data
-def load_and_preprocess_data():
-    # Fixed file path - adjust according to your folder structure
-    df = pd.read_csv('Data/nvidia_stock.csv')  # ✅ Corrected path
-    df = df.iloc[2:].copy()
-    df = df.rename(columns={'Price': 'Date'})
     df['Date'] = pd.to_datetime(df['Date'])
-    df = df.set_index('Date')
+    df = df.sort_values('Date').reset_index(drop=True)
 
-    # Convert numeric columns
-    numeric_cols = ['Close', 'High', 'Low', 'Open', 'Volume']
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    df = df.ffill().copy()
+    # Stock price columns
+    stock_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    stock_cols = [col for col in stock_cols if col in df.columns]
+    if 'Close' not in stock_cols and 'Close' in df.columns:
+        stock_cols.append('Close')
 
-    return df
+    # Technical indicator keywords (customize if needed)
+    technical_keywords = ['sma', 'ema', 'rsi', 'macd', 'bb_', 'bollinger', 'atr', 'stoch',
+                          'cci', 'adx', 'obv', 'roc', 'mfi']
+    tech_cols = [col for col in df.columns
+                 if any(k in col.lower() for k in technical_keywords)]
 
-df = load_and_preprocess_data()
+    # Remove any columns overlapping with stock_cols just in case
+    tech_cols = list(set(tech_cols) - set(stock_cols))
 
-# --- Feature Engineering ---
-update_progress(2)
-status_text.text("Calculating technical indicators...")
+    selected_cols = stock_cols + tech_cols
+    if not selected_cols:
+        print("Error: No stock or technical indicator columns found.")
+        return
 
-def calculate_technical_indicators(df):
-    df['MACD'] = ta.trend.macd(df['Close'])
-    df['MACD_Signal'] = ta.trend.macd_signal(df['Close'])
-    df['RSI'] = ta.momentum.rsi(df['Close'])
-    df['Stoch_K'] = ta.momentum.stoch(df['High'], df['Low'], df['Close'])
-    df['Stoch_D'] = ta.momentum.stoch_signal(df['High'], df['Low'], df['Close'])
-    bollinger = ta.volatility.BollingerBands(close=df['Close'])
-    df['BB_Upper'] = bollinger.bollinger_hband()
-    df['BB_Lower'] = bollinger.bollinger_lband()
-    df['BB_Mid'] = bollinger.bollinger_mavg()
-    df['ATR'] = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'])
+    df = df[['Date'] + selected_cols].dropna()
+    if df.empty or len(df) < 61:
+        print("Error: Not enough data after filtering and dropping NaNs.")
+        return
 
-    for col in ['Close', 'Volume', 'RSI', 'MACD']:
-        for lag in [1, 2, 3]:
-            df[f'{col}_lag_{lag}'] = df[col].shift(lag)
+    scaler = MinMaxScaler()
+    scaled_data = scaler.fit_transform(df[selected_cols])
+    scaled_df = pd.DataFrame(scaled_data, columns=selected_cols)
 
-    df['Future_Close'] = df['Close'].shift(-3)
-    df = df.dropna().copy()
-    return df
+    look_back = 60
+    pred_horizon = 1
+    target_col = 'Close'
+    close_index = selected_cols.index(target_col)
 
-df = calculate_technical_indicators(df)
+    X, y = [], []
+    for i in range(look_back, len(scaled_df) - pred_horizon + 1):
+        X.append(scaled_df.iloc[i - look_back:i].values)
+        y.append(scaled_df.iloc[i + pred_horizon - 1, close_index])
 
-# Feature selection
-features = ['Close', 'High', 'Low', 'Open', 'Volume',
-            'MACD', 'MACD_Signal', 'RSI', 'Stoch_K', 'Stoch_D',
-            'BB_Upper', 'BB_Lower', 'BB_Mid', 'ATR',
-            'Close_lag_1', 'Close_lag_2', 'Close_lag_3',
-            'Volume_lag_1', 'Volume_lag_2', 'Volume_lag_3',
-            'RSI_lag_1', 'RSI_lag_2', 'RSI_lag_3',
-            'MACD_lag_1', 'MACD_lag_2', 'MACD_lag_3']
+    X = np.array(X).reshape(len(X), -1)
+    y = np.array(y)
 
-X = df[features]
-y = df['Future_Close']
+    split_index = int(0.8 * len(X))
+    X_train, X_test = X[:split_index], X[split_index:]
+    y_train, y_test = y[:split_index], y[split_index:]
 
-# --- Train-Test Split ---
-update_progress(3)
-status_text.text("Splitting data into training and test sets...")
-
-split_idx = int(len(X) * (1 - test_size / 100))
-X_train, X_test = X[:split_idx], X[split_idx:]
-y_train, y_test = y[:split_idx], y[split_idx:]
-
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("Training Data")
-    st.write(f"Shape: {X_train.shape}")
-    st.write(f"Date range: {df.index[0].date()} to {df.index[split_idx - 1].date()}")
-
-with col2:
-    st.subheader("Test Data")
-    st.write(f"Shape: {X_test.shape}")
-    st.write(f"Date range: {df.index[split_idx].date()} to {df.index[-1].date()}")
-
-# --- Model Training ---
-update_progress(4)
-status_text.text("Training Random Forest Regressor...")
-
-@st.cache_resource
-def train_model(X_train, y_train, n_estimators, max_depth):
-    pipeline = Pipeline([
-        ('scaler', StandardScaler()),
-        ('regressor', RandomForestRegressor(
-            random_state=42,
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            n_jobs=-1
-        ))
-    ])
+    if len(X_train) == 0 or len(X_test) == 0:
+        print("Error: Insufficient train/test data split.")
+        return
 
     param_grid = {
-        'regressor__min_samples_split': [2, 5, 10],
-        'regressor__min_samples_leaf': [1, 2, 4],
-        'regressor__max_features': ['sqrt', 'log2', 0.5],
-        'regressor__bootstrap': [True, False]
+        'n_estimators': [100],
+        'max_depth': [5, 10, None],
+        'min_samples_split': [2, 5],
+        'min_samples_leaf': [1, 2]
     }
 
     tscv = TimeSeriesSplit(n_splits=5)
+    rf = RandomForestRegressor(random_state=42)
 
-    grid_search = GridSearchCV(
-        estimator=pipeline,
-        param_grid=param_grid,
-        cv=tscv,
-        scoring='neg_mean_squared_error',
-        n_jobs=-1,
-        verbose=1
-    )
-
-    with st.spinner("Training in progress..."):
+    with parallel_backend('threading'):
+        grid_search = GridSearchCV(rf, param_grid, cv=tscv, scoring='r2', n_jobs=-1)
         grid_search.fit(X_train, y_train)
 
-    return grid_search
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(X_test)
 
-grid_search = train_model(X_train, y_train, n_estimators, max_depth)
-best_model = grid_search.best_estimator_
+    test_accuracy = r2_score(y_test, y_pred)
+    print(f"Final R² Accuracy (Test Set): {test_accuracy:.2f}")
 
-st.subheader("Best Model Parameters")
-st.write(grid_search.best_params_)
-
-# --- Model Evaluation ---
-update_progress(5)
-status_text.text("Evaluating model performance...")
-
-y_pred = best_model.predict(X_test)
-
-mse = mean_squared_error(y_test, y_pred)
-rmse = np.sqrt(mse)
-mae = mean_absolute_error(y_test, y_pred)
-r2 = r2_score(y_test, y_pred)
-
-st.subheader("Model Performance Metrics")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("RMSE", f"${rmse:.2f}")
-col2.metric("MAE", f"${mae:.2f}")
-col3.metric("R² Score", f"{r2:.4f}")
-col4.metric("Training Size", f"{len(X_train)} days")
-
-# --- Visualization ---
-update_progress(6)
-status_text.text("Creating visualizations...")
-
-st.subheader("Actual vs Predicted Prices")
-
-fig, ax = plt.subplots(figsize=(12, 6))
-ax.plot(df.index[split_idx:], y_test, color='navy', label='Actual Price', linewidth=2)
-ax.plot(df.index[split_idx:], y_pred, color='red', linestyle='--', label='Predicted Price', linewidth=2)
-
-errors = y_test - y_pred
-ax.fill_between(df.index[split_idx:], y_pred, y_test,
-                where=(errors > 0), facecolor='green', alpha=0.2, interpolate=True, label='Overprediction')
-ax.fill_between(df.index[split_idx:], y_pred, y_test,
-                where=(errors < 0), facecolor='red', alpha=0.2, interpolate=True, label='Underprediction')
-
-ax.set_xlabel('Date', fontsize=12)
-ax.set_ylabel('Price ($)', fontsize=12)
-ax.grid(True, alpha=0.3)
-ax.set_title('Actual vs Predicted NVIDIA Stock Prices', fontsize=16, pad=20)
-ax.legend(loc='upper left')
-
-ax.xaxis.set_major_locator(mdates.MonthLocator())
-ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
-fig.autofmt_xdate()
-
-st.pyplot(fig)
-
-# Feature importance
-feature_importance = best_model.named_steps['regressor'].feature_importances_
-importance_df = pd.DataFrame({'Feature': features, 'Importance': feature_importance})
-importance_df = importance_df.sort_values('Importance', ascending=False).head(15)
-
-st.subheader("Top 15 Important Features")
-fig_importance, ax = plt.subplots(figsize=(10, 6))
-sns.barplot(x='Importance', y='Feature', data=importance_df, ax=ax)
-ax.set_title('Feature Importance')
-st.pyplot(fig_importance)
-
-status_text.text("Analysis complete!")
-progress_bar.empty()
+if __name__ == '__main__':
+    run_stock_technical_prediction()
