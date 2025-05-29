@@ -4,9 +4,9 @@ This project aims to predict NVIDIA stock prices based on sentiment analysis of 
 
 # Branches 
 
-1 - priya: LSTM models
-2 - Kavishek: Random Forest Regressor models
-3 - Hirnesh: XGBoost Regressor models    
+1 - priya: LSTM models    
+2 - Kavishek: Random Forest Regressor models    
+3 - Hirnesh: XGBoost Regressor models        
 
 #Instructions
 1 - setup virtual environments and load dependencies from requirements.txt        
